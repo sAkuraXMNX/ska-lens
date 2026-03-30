@@ -40,6 +40,8 @@ import java.util.stream.Collectors;
 @Service
 public class PhotoService {
 
+    private static final int MAX_VISIBILITY_SCAN_BATCHES = 5;
+
     private final PhotoRepository photoRepository;
     private final AlbumRepository albumRepository;
     private final CommentService commentService;
@@ -267,6 +269,7 @@ public class PhotoService {
         ensurePhotoExists(id);
         Query query = Query.query(
                 Criteria.where("_id").is(id)
+                        .and("likeCount").gt(0)
                         .and("likedBy").is(request.getUserId())
         );
         Update update = new Update()
@@ -361,7 +364,7 @@ public class PhotoService {
             int limit
     ) {
         CursorPosition scanningCursor = cursor;
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < MAX_VISIBILITY_SCAN_BATCHES; i++) {
             List<Photo> scanned = scanFeedBatch(scanningCursor, limit, tag, albumId);
             if (scanned.isEmpty()) {
                 return false;
