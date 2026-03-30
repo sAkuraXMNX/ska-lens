@@ -14,8 +14,8 @@ interface LocationState {
 export function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('admin123456')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
 
   const mutation = useMutation({
     mutationFn: skaLensApi.login,
