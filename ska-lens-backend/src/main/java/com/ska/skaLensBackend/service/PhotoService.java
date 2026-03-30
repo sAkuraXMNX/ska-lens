@@ -3,6 +3,7 @@ package com.ska.skaLensBackend.service;
 import com.ska.skaLensBackend.dto.BatchTagUpdateRequest;
 import com.ska.skaLensBackend.dto.CommentRequest;
 import com.ska.skaLensBackend.dto.LikeRequest;
+import com.ska.skaLensBackend.dto.PhotoFeedResponse;
 import com.ska.skaLensBackend.dto.PhotoUpdateRequest;
 import com.ska.skaLensBackend.model.Album;
 import com.ska.skaLensBackend.model.Comment;
@@ -16,6 +17,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -71,6 +73,41 @@ public class PhotoService {
                 .filter(photo -> tag == null || photo.getTags() != null && photo.getTags().contains(tag))
                 .filter(photo -> includePrivate || isPublicPhoto(photo))
                 .toList();
+    }
+
+    public PhotoFeedResponse listFeed(String cursor, int limit, String tag, String albumId, boolean includePrivate) {
+        int safeLimit = Math.min(Math.max(limit, 1), 50);
+        CursorPosition cursorPosition = parseCursor(cursor);
+        List<Photo> items = new ArrayList<>();
+        CursorPosition lastScanned = cursorPosition;
+
+        while (items.size() < safeLimit) {
+            List<Photo> scanned = scanFeedBatch(lastScanned, safeLimit, tag, albumId);
+            if (scanned.isEmpty()) {
+                break;
+            }
+            lastScanned = toCursorPosition(scanned.get(scanned.size() - 1));
+            for (Photo photo : scanned) {
+                if (includePrivate || isPublicPhoto(photo)) {
+                    items.add(photo);
+                    if (items.size() == safeLimit) {
+                        break;
+                    }
+                }
+            }
+            if (scanned.size() < safeLimit) {
+                break;
+            }
+        }
+
+        CursorPosition lastVisible = items.isEmpty() ? null : toCursorPosition(items.get(items.size() - 1));
+        String nextCursor = items.isEmpty() ? null : buildCursor(items.get(items.size() - 1));
+        boolean hasMore = items.size() == safeLimit && hasMoreVisiblePhotos(lastVisible, tag, albumId, includePrivate, safeLimit);
+        return PhotoFeedResponse.builder()
+                .items(items)
+                .nextCursor(nextCursor)
+                .hasMore(hasMore)
+                .build();
     }
 
     public List<Photo> listAllForAdmin() {
@@ -290,9 +327,86 @@ public class PhotoService {
                 .toList();
     }
 
+    private List<Photo> scanFeedBatch(CursorPosition cursor, int limit, String tag, String albumId) {
+        List<Criteria> andCriteria = new ArrayList<>();
+        andCriteria.add(Criteria.where("published").is(true));
+
+        if (StringUtils.hasText(tag)) {
+            andCriteria.add(Criteria.where("tags").in(tag));
+        }
+        if (StringUtils.hasText(albumId)) {
+            andCriteria.add(Criteria.where("albumId").is(albumId));
+        }
+        if (cursor != null) {
+            andCriteria.add(new Criteria().orOperator(
+                    Criteria.where("createdAt").lt(cursor.createdAt()),
+                    new Criteria().andOperator(
+                            Criteria.where("createdAt").is(cursor.createdAt()),
+                            Criteria.where("_id").lt(cursor.photoId())
+                    )
+            ));
+        }
+
+        Query query = new Query(new Criteria().andOperator(andCriteria.toArray(new Criteria[0])))
+                .with(Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("_id")))
+                .limit(limit);
+        return mongoTemplate.find(query, Photo.class);
+    }
+
+    private boolean hasMoreVisiblePhotos(
+            CursorPosition cursor,
+            String tag,
+            String albumId,
+            boolean includePrivate,
+            int limit
+    ) {
+        CursorPosition scanningCursor = cursor;
+        for (int i = 0; i < 5; i++) {
+            List<Photo> scanned = scanFeedBatch(scanningCursor, limit, tag, albumId);
+            if (scanned.isEmpty()) {
+                return false;
+            }
+            if (includePrivate || scanned.stream().anyMatch(this::isPublicPhoto)) {
+                return true;
+            }
+            scanningCursor = toCursorPosition(scanned.get(scanned.size() - 1));
+            if (scanned.size() < limit) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private CursorPosition parseCursor(String cursor) {
+        if (!StringUtils.hasText(cursor)) {
+            return null;
+        }
+        String[] parts = cursor.split("_", 2);
+        if (parts.length != 2) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid cursor");
+        }
+        try {
+            return new CursorPosition(Instant.ofEpochMilli(Long.parseLong(parts[0])), parts[1]);
+        } catch (NumberFormatException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid cursor");
+        }
+    }
+
+    private String buildCursor(Photo photo) {
+        Instant createdAt = photo.getCreatedAt() == null ? Instant.EPOCH : photo.getCreatedAt();
+        return createdAt.toEpochMilli() + "_" + photo.getId();
+    }
+
+    private CursorPosition toCursorPosition(Photo photo) {
+        return new CursorPosition(photo.getCreatedAt() == null ? Instant.EPOCH : photo.getCreatedAt(), photo.getId());
+    }
+
     private void ensurePhotoExists(String id) {
         if (!photoRepository.existsById(id)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Photo not found");
         }
+    }
+
+    private record CursorPosition(Instant createdAt, String photoId) {
     }
 }

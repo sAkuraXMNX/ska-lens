@@ -4,11 +4,24 @@ import type {
   AuthRequest,
   AuthResponse,
   CreateAlbumRequest,
+  PhotoComment,
+  PhotoFeedResponse,
   Photo,
+  ProfileResponse,
   UpdatePhotoRequest,
 } from '../types/api'
 
 export const skaLensApi = {
+  getFeed: async (params?: {
+    cursor?: string
+    limit?: number
+    tag?: string
+    albumId?: string
+    includePrivate?: boolean
+  }): Promise<PhotoFeedResponse> => {
+    const response = await apiClient.get<PhotoFeedResponse>('/api/v1/photos/feed', { params })
+    return response.data
+  },
   getPhotos: async (params?: { tag?: string; albumId?: string; includePrivate?: boolean }): Promise<Photo[]> => {
     const response = await apiClient.get<Photo[]>('/api/photos', { params })
     return response.data
@@ -17,8 +30,32 @@ export const skaLensApi = {
     const response = await apiClient.get<Photo>(`/api/photos/${id}`)
     return response.data
   },
-  addComment: async (id: string, payload: { authorName: string; content: string }): Promise<Photo> => {
+  listComments: async (id: string): Promise<PhotoComment[]> => {
+    const response = await apiClient.get<PhotoComment[]>(`/api/photos/${id}/comments`)
+    return response.data
+  },
+  listTopComments: async (id: string): Promise<PhotoComment[]> => {
+    const response = await apiClient.get<PhotoComment[]>(`/api/photos/${id}/comments/highlight`)
+    return response.data
+  },
+  addComment: async (id: string, payload: { userId: string; content: string }): Promise<Photo> => {
     const response = await apiClient.post<Photo>(`/api/photos/${id}/comments`, payload)
+    return response.data
+  },
+  likePhoto: async (id: string, userId: string): Promise<Photo> => {
+    const response = await apiClient.post<Photo>(`/api/photos/${id}/likes`, { userId })
+    return response.data
+  },
+  unlikePhoto: async (id: string, userId: string): Promise<Photo> => {
+    const response = await apiClient.delete<Photo>(`/api/photos/${id}/likes`, { data: { userId } })
+    return response.data
+  },
+  getProfile: async (username?: string): Promise<ProfileResponse> => {
+    const response = await apiClient.get<ProfileResponse>('/api/profile', { params: { username } })
+    return response.data
+  },
+  getProfilePhotos: async (params?: { username?: string; cursor?: string; limit?: number }): Promise<PhotoFeedResponse> => {
+    const response = await apiClient.get<PhotoFeedResponse>('/api/profile/photos', { params })
     return response.data
   },
   getAdminPhotos: async (): Promise<Photo[]> => {

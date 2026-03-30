@@ -1,44 +1,106 @@
 import { useEffect, useMemo, useState } from 'react'
-import Masonry from 'react-masonry-css'
-import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInView } from 'react-intersection-observer'
 import { Camera, Images } from 'lucide-react'
 import { skaLensApi } from '../api/skaLensApi'
-
-function absoluteImageUrl(path?: string) {
-  if (!path) return ''
-  if (path.startsWith('http')) return path
-  const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
-  return `${base}${path}`
-}
+import { FeedCard } from '../components/FeedCard'
+import type { Photo, PhotoComment } from '../types/api'
 
 export function HomePage() {
   const [activeSlide, setActiveSlide] = useState(0)
   const [selectedTag, setSelectedTag] = useState<string>('')
   const [selectedAlbumId, setSelectedAlbumId] = useState<string>('')
+  const queryClient = useQueryClient()
+  const { ref: sentinelRef, inView } = useInView({ threshold: 0 })
 
   const albumsQuery = useQuery({
     queryKey: ['albums'],
     queryFn: () => skaLensApi.getAlbums(false),
   })
 
-  const photosQuery = useQuery({
-    queryKey: ['photos', selectedTag, selectedAlbumId],
-    queryFn: () => skaLensApi.getPhotos({
-      tag: selectedTag || undefined,
-      albumId: selectedAlbumId || undefined,
-    }),
+  const photosQuery = useInfiniteQuery({
+    queryKey: ['photos-feed', selectedTag, selectedAlbumId],
+    queryFn: ({ pageParam }) =>
+      skaLensApi.getFeed({
+        cursor: pageParam,
+        limit: 12,
+        tag: selectedTag || undefined,
+        albumId: selectedAlbumId || undefined,
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? (lastPage.nextCursor ?? undefined) : undefined),
   })
 
-  const featuredPhotos = useMemo(() => (photosQuery.data ?? []).slice(0, 5), [photosQuery.data])
+  const allPhotos = useMemo(() => photosQuery.data?.pages.flatMap((page) => page.items) ?? [], [photosQuery.data])
+  const featuredPhotos = useMemo(() => allPhotos.slice(0, 5), [allPhotos])
+
+  const commentsQuery = useQuery({
+    queryKey: ['feed-top-comments', allPhotos.map((photo) => photo.id).join(',')],
+    queryFn: async () => {
+      const entries = await Promise.all(
+        allPhotos.slice(0, 30).map(async (photo) => [photo.id, await skaLensApi.listTopComments(photo.id)] as const),
+      )
+      return Object.fromEntries(entries)
+    },
+    enabled: allPhotos.length > 0,
+  })
 
   const allTags = useMemo(() => {
     const tags = new Set<string>()
-    ;(photosQuery.data ?? []).forEach((photo) => {
+    allPhotos.forEach((photo) => {
       photo.tags?.forEach((tag) => tags.add(tag))
     })
     return Array.from(tags)
-  }, [photosQuery.data])
+  }, [allPhotos])
+
+  const likeMutation = useMutation({
+    mutationFn: ({ photo, nextLiked }: { photo: Photo; nextLiked: boolean }) =>
+      nextLiked ? skaLensApi.likePhoto(photo.id, 'viewer') : skaLensApi.unlikePhoto(photo.id, 'viewer'),
+    onMutate: async ({ photo, nextLiked }) => {
+      await queryClient.cancelQueries({ queryKey: ['photos-feed', selectedTag, selectedAlbumId] })
+      const previous = queryClient.getQueryData(['photos-feed', selectedTag, selectedAlbumId])
+      queryClient.setQueryData(['photos-feed', selectedTag, selectedAlbumId], (oldData: unknown) => {
+        if (!oldData || typeof oldData !== 'object' || !('pages' in oldData)) return oldData
+        const data = oldData as { pages: Array<{ items: Photo[] }>; pageParams: unknown[] }
+        return {
+          ...data,
+          pages: data.pages.map((page) => ({
+            ...page,
+            items: page.items.map((item) => {
+              if (item.id !== photo.id) return item
+              const likedBy = new Set(item.likedBy ?? [])
+              if (nextLiked) likedBy.add('viewer')
+              else likedBy.delete('viewer')
+              return {
+                ...item,
+                likedBy: Array.from(likedBy),
+                likeCount: Math.max(0, (item.likeCount ?? 0) + (nextLiked ? 1 : -1)),
+              }
+            }),
+          })),
+        }
+      })
+      return { previous }
+    },
+    onSuccess: (updatedPhoto) => {
+      queryClient.setQueriesData({ queryKey: ['photos-feed'] }, (oldData: unknown) => {
+        if (!oldData || typeof oldData !== 'object' || !('pages' in oldData)) return oldData
+        const data = oldData as { pages: Array<{ items: Photo[] }>; pageParams: unknown[] }
+        return {
+          ...data,
+          pages: data.pages.map((page) => ({
+            ...page,
+            items: page.items.map((item) => (item.id === updatedPhoto.id ? updatedPhoto : item)),
+          })),
+        }
+      })
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(['photos-feed', selectedTag, selectedAlbumId], context.previous)
+      }
+    },
+  })
 
   useEffect(() => {
     if (featuredPhotos.length <= 1) return
@@ -48,6 +110,12 @@ export function HomePage() {
     return () => window.clearInterval(timer)
   }, [featuredPhotos])
 
+  useEffect(() => {
+    if (inView && photosQuery.hasNextPage && !photosQuery.isFetchingNextPage) {
+      photosQuery.fetchNextPage()
+    }
+  }, [inView, photosQuery])
+
   return (
     <div className="mx-auto max-w-7xl p-4 md:p-6">
       <section className="relative mb-8 h-[55vh] min-h-[360px] overflow-hidden rounded-2xl bg-slate-900">
@@ -56,7 +124,7 @@ export function HomePage() {
             {featuredPhotos.map((photo, index) => (
               <img
                 key={photo.id}
-                src={absoluteImageUrl(photo.imageUrl)}
+                src={photo.imageUrl.startsWith('http') ? photo.imageUrl : `${import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'}${photo.imageUrl}`}
                 alt={photo.title ?? 'photo'}
                 className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-500 ${
                   index === activeSlide ? 'opacity-100' : 'opacity-0'
@@ -112,7 +180,7 @@ export function HomePage() {
 
         <div className="flex items-end justify-start gap-4 text-sm text-slate-600 md:justify-end">
           <span className="inline-flex items-center gap-1">
-            <Images size={16} /> {(photosQuery.data ?? []).length} 张作品
+            <Images size={16} /> {allPhotos.length} 张作品
           </span>
           <span className="inline-flex items-center gap-1">
             <Camera size={16} /> {(albumsQuery.data ?? []).length} 个相册
@@ -121,36 +189,41 @@ export function HomePage() {
       </section>
 
       {photosQuery.isLoading ? (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
-          {Array.from({ length: 8 }).map((_, index) => (
-            <div key={index} className="h-52 animate-pulse rounded-xl bg-slate-200" />
+        <div className="space-y-4">
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div key={index} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <div className="h-16 animate-pulse bg-slate-100" />
+              <div className="aspect-[4/5] animate-pulse bg-slate-200" />
+              <div className="h-24 animate-pulse bg-slate-100" />
+            </div>
           ))}
         </div>
       ) : photosQuery.isError ? (
         <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-red-700">加载作品失败，请稍后重试。</div>
-      ) : (photosQuery.data ?? []).length === 0 ? (
+      ) : allPhotos.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-slate-500">暂无作品数据</div>
       ) : (
-        <Masonry
-          breakpointCols={{ default: 4, 1280: 3, 960: 2, 640: 1 }}
-          className="-ml-4 flex w-auto"
-          columnClassName="pl-4"
-        >
-          {(photosQuery.data ?? []).map((photo) => (
-            <Link key={photo.id} to={`/photos/${photo.id}`} className="mb-4 block overflow-hidden rounded-xl bg-white shadow-sm">
-              <img
-                src={absoluteImageUrl(photo.thumbnailUrl ?? photo.imageUrl)}
-                alt={photo.title ?? 'photo'}
-                className="w-full object-cover"
-                loading="lazy"
-              />
-              <div className="p-3">
-                <h3 className="line-clamp-1 text-sm font-semibold text-slate-900">{photo.title ?? 'Untitled'}</h3>
-                <p className="mt-1 line-clamp-2 text-xs text-slate-500">{photo.description ?? '暂无描述'}</p>
-              </div>
-            </Link>
+        <section className="mx-auto max-w-3xl space-y-4">
+          {allPhotos.map((photo) => (
+            <FeedCard
+              key={photo.id}
+              photo={photo}
+              topComments={(commentsQuery.data?.[photo.id] as PhotoComment[] | undefined) ?? []}
+              onLikeToggle={(p, nextLiked) => likeMutation.mutateAsync({ photo: p, nextLiked })}
+            />
           ))}
-        </Masonry>
+          <div ref={sentinelRef} className="h-8" />
+          {photosQuery.isFetchingNextPage && (
+            <div className="space-y-3">
+              {Array.from({ length: 2 }).map((_, index) => (
+                <div key={index} className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <div className="h-12 animate-pulse bg-slate-100" />
+                  <div className="aspect-[4/5] animate-pulse bg-slate-200" />
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
       )}
     </div>
   )

@@ -9,7 +9,9 @@ export interface ExifInfo {
 }
 
 export interface PhotoComment {
-  authorName: string
+  id?: string
+  photoId?: string
+  userId: string
   content: string
   createdAt: string
 }
@@ -23,10 +25,27 @@ export interface Photo {
   albumId?: string
   tags?: string[]
   exif?: ExifInfo
-  comments?: PhotoComment[]
+  likedBy?: string[]
+  likeCount?: number
+  commentCount?: number
   published: boolean
   createdAt: string
   updatedAt: string
+}
+
+export interface PhotoFeedResponse {
+  items: Photo[]
+  nextCursor: string | null
+  hasMore: boolean
+}
+
+export interface ProfileResponse {
+  username: string
+  displayName: string
+  bio: string
+  avatarUrl?: string | null
+  totalLikes: number
+  albumCount: number
 }
 
 export type AlbumVisibility = 'PUBLIC' | 'PRIVATE'

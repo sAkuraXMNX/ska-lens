@@ -4,6 +4,7 @@ import com.ska.skaLensBackend.dto.BatchDeleteRequest;
 import com.ska.skaLensBackend.dto.BatchTagUpdateRequest;
 import com.ska.skaLensBackend.dto.CommentRequest;
 import com.ska.skaLensBackend.dto.LikeRequest;
+import com.ska.skaLensBackend.dto.PhotoFeedResponse;
 import com.ska.skaLensBackend.dto.PhotoUpdateRequest;
 import com.ska.skaLensBackend.model.Comment;
 import com.ska.skaLensBackend.model.Photo;
@@ -39,6 +40,19 @@ public class PhotoController {
     @GetMapping("/admin")
     public List<Photo> listAdmin() {
         return photoService.listAllForAdmin();
+    }
+
+    @GetMapping("/feed")
+    public PhotoFeedResponse feed(
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "12") int limit,
+            @RequestParam(required = false) String tag,
+            @RequestParam(required = false) String albumId,
+            @RequestParam(defaultValue = "false") boolean includePrivate,
+            Authentication authentication
+    ) {
+        boolean canIncludePrivate = includePrivate && isAdmin(authentication);
+        return photoService.listFeed(cursor, limit, tag, albumId, canIncludePrivate);
     }
 
     @GetMapping("/{id}")

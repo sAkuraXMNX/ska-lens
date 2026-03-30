@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
+import { Heart } from 'lucide-react'
 import { skaLensApi } from '../api/skaLensApi'
 
 function absoluteImageUrl(path?: string) {
@@ -15,8 +16,10 @@ export function PhotoDetailPage() {
   const { id = '' } = useParams()
   const queryClient = useQueryClient()
   const [zoomOpen, setZoomOpen] = useState(false)
-  const [authorName, setAuthorName] = useState('')
+  const [userId, setUserId] = useState('viewer')
   const [content, setContent] = useState('')
+  const [optimisticLiked, setOptimisticLiked] = useState<boolean | null>(null)
+  const [optimisticLikeCount, setOptimisticLikeCount] = useState<number | null>(null)
 
   const photoQuery = useQuery({
     queryKey: ['photo', id],
@@ -25,11 +28,30 @@ export function PhotoDetailPage() {
   })
 
   const addCommentMutation = useMutation({
-    mutationFn: (payload: { authorName: string; content: string }) => skaLensApi.addComment(id, payload),
+    mutationFn: (payload: { userId: string; content: string }) => skaLensApi.addComment(id, payload),
     onSuccess: () => {
-      setAuthorName('')
       setContent('')
       queryClient.invalidateQueries({ queryKey: ['photo', id] })
+      queryClient.invalidateQueries({ queryKey: ['photo-comments', id] })
+    },
+  })
+
+  const commentsQuery = useQuery({
+    queryKey: ['photo-comments', id],
+    queryFn: () => skaLensApi.listComments(id),
+    enabled: Boolean(id),
+  })
+
+  const likeMutation = useMutation({
+    mutationFn: (liked: boolean) => (liked ? skaLensApi.likePhoto(id, 'viewer') : skaLensApi.unlikePhoto(id, 'viewer')),
+    onSuccess: (updatedPhoto) => {
+      queryClient.setQueryData(['photo', id], updatedPhoto)
+      setOptimisticLiked(null)
+      setOptimisticLikeCount(null)
+    },
+    onError: () => {
+      setOptimisticLiked(null)
+      setOptimisticLikeCount(null)
     },
   })
 
@@ -48,8 +70,8 @@ export function PhotoDetailPage() {
 
   const submitComment = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!authorName.trim() || !content.trim()) return
-    addCommentMutation.mutate({ authorName: authorName.trim(), content: content.trim() })
+    if (!userId.trim() || !content.trim()) return
+    addCommentMutation.mutate({ userId: userId.trim(), content: content.trim() })
   }
 
   if (photoQuery.isLoading) {
@@ -61,18 +83,35 @@ export function PhotoDetailPage() {
   }
 
   const photo = photoQuery.data
+  const likedByMe = optimisticLiked ?? (photo.likedBy?.includes('viewer') ?? false)
+  const likeCount = optimisticLikeCount ?? (photo.likeCount ?? 0)
+
+  const toggleLike = () => {
+    const nextLiked = !likedByMe
+    setOptimisticLiked(nextLiked)
+    setOptimisticLikeCount(Math.max(0, likeCount + (nextLiked ? 1 : -1)))
+    likeMutation.mutate(nextLiked)
+  }
 
   return (
-    <div className="mx-auto grid max-w-7xl gap-6 p-4 md:grid-cols-[1.4fr_1fr] md:p-6">
+    <div className="mx-auto grid max-w-7xl gap-6 p-4 md:grid-cols-[1.5fr_1fr] md:p-6">
       <section className="rounded-xl bg-white p-4 shadow-sm">
         <button type="button" onClick={() => setZoomOpen(true)} className="block w-full cursor-zoom-in overflow-hidden rounded-lg">
           <img src={absoluteImageUrl(photo.imageUrl)} alt={photo.title ?? 'photo'} className="w-full object-cover" />
         </button>
         <h1 className="mt-4 text-2xl font-semibold text-slate-900">{photo.title ?? 'Untitled'}</h1>
         <p className="mt-2 text-slate-600">{photo.description ?? '暂无描述'}</p>
+        <button
+          type="button"
+          onClick={toggleLike}
+          className="mt-3 inline-flex items-center gap-2 rounded-full border border-slate-200 px-3 py-1.5 text-sm"
+        >
+          <Heart className={`h-4 w-4 ${likedByMe ? 'fill-pink-500 text-pink-500' : 'text-slate-700'}`} />
+          {likeCount} 次赞
+        </button>
       </section>
 
-      <aside className="space-y-4 rounded-xl bg-white p-4 shadow-sm">
+      <aside className="space-y-4 rounded-xl bg-white p-4 shadow-sm md:max-h-[78vh] md:overflow-y-auto">
         <h2 className="text-lg font-semibold text-slate-900">EXIF 信息</h2>
         <ul className="space-y-2 text-sm text-slate-600">
           {exifItems.map(([label, value]) => (
@@ -87,8 +126,8 @@ export function PhotoDetailPage() {
           <h3 className="mb-2 text-base font-semibold text-slate-900">评论区</h3>
           <form className="space-y-2" onSubmit={submitComment}>
             <input
-              value={authorName}
-              onChange={(event) => setAuthorName(event.target.value)}
+              value={userId}
+              onChange={(event) => setUserId(event.target.value)}
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
               placeholder="你的昵称"
             />
@@ -108,12 +147,12 @@ export function PhotoDetailPage() {
           </form>
 
           <div className="mt-4 space-y-2">
-            {(photo.comments ?? []).length === 0 ? (
+            {(commentsQuery.data ?? []).length === 0 ? (
               <p className="text-sm text-slate-500">还没有评论，来发表第一条吧。</p>
             ) : (
-              (photo.comments ?? []).map((comment, index) => (
-                <div key={`${comment.authorName}-${comment.createdAt}-${index}`} className="rounded-md border border-slate-200 p-3">
-                  <div className="text-sm font-medium text-slate-900">{comment.authorName}</div>
+              (commentsQuery.data ?? []).map((comment, index) => (
+                <div key={`${comment.userId}-${comment.createdAt}-${index}`} className="rounded-md border border-slate-200 p-3">
+                  <div className="text-sm font-medium text-slate-900">{comment.userId}</div>
                   <div className="text-xs text-slate-500">{new Date(comment.createdAt).toLocaleString()}</div>
                   <p className="mt-1 text-sm text-slate-700">{comment.content}</p>
                 </div>
@@ -129,7 +168,22 @@ export function PhotoDetailPage() {
           className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/85 p-6"
           onClick={() => setZoomOpen(false)}
         >
-          <img src={absoluteImageUrl(photo.imageUrl)} alt={photo.title ?? 'photo zoom'} className="max-h-full max-w-full object-contain" />
+          <div className="grid h-full w-full max-w-7xl gap-4 md:grid-cols-[1.7fr_1fr]">
+            <div className="flex items-center justify-center">
+              <img src={absoluteImageUrl(photo.imageUrl)} alt={photo.title ?? 'photo zoom'} className="max-h-full max-w-full object-contain" />
+            </div>
+            <div className="hidden rounded-xl bg-black/45 p-4 text-left text-white md:block md:overflow-y-auto">
+              <h3 className="text-lg font-semibold">评论区</h3>
+              <div className="mt-3 space-y-3">
+                {(commentsQuery.data ?? []).slice(0, 20).map((comment, index) => (
+                  <div key={`${comment.userId}-${comment.createdAt}-theater-${index}`} className="rounded-md bg-white/10 p-2">
+                    <div className="text-sm font-semibold">{comment.userId}</div>
+                    <p className="text-sm text-white/90">{comment.content}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </button>
       )}
     </div>

@@ -5,6 +5,7 @@ import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { PhotoDetailPage } from './pages/PhotoDetailPage'
+import { ProfilePage } from './pages/ProfilePage'
 
 function App() {
   return (
@@ -21,6 +22,9 @@ function App() {
             <Link to="/admin" className="hover:text-slate-900">
               管理台
             </Link>
+            <Link to="/profile" className="hover:text-slate-900">
+              个人主页
+            </Link>
           </nav>
         </div>
       </header>
@@ -28,6 +32,7 @@ function App() {
       <main>
         <Routes>
           <Route path="/" element={<HomePage />} />
+          <Route path="/profile" element={<ProfilePage />} />
           <Route path="/photos/:id" element={<PhotoDetailPage />} />
           <Route path="/admin/login" element={<LoginPage />} />
           <Route element={<ProtectedRoute />}>

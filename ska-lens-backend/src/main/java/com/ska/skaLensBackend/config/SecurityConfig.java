@@ -35,6 +35,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.DELETE, "/api/photos/*/likes").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/photos/*/comments").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/photos/*/comments", "/api/photos/*/comments/highlight").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/profile/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/photos/**", "/api/albums/**", "/uploads/**").permitAll()
                         .anyRequest().hasRole("ADMIN")
                 )

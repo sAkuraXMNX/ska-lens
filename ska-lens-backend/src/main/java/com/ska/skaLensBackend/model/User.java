@@ -22,6 +22,9 @@ public class User {
 
     private String username;
     private String passwordHash;
+    private String displayName;
+    private String bio;
+    private String avatarUrl;
 
     @Builder.Default
     private List<Role> roles = List.of(Role.ADMIN);
