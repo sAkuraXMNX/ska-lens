@@ -36,7 +36,13 @@ public class Photo {
     private ExifInfo exif;
 
     @Builder.Default
-    private List<Comment> comments = List.of();
+    private List<String> likedBy = List.of();
+
+    @Builder.Default
+    private long likeCount = 0L;
+
+    @Builder.Default
+    private long commentCount = 0L;
 
     @Builder.Default
     private boolean published = true;
@@ -56,15 +62,5 @@ public class Photo {
         private Integer iso;
         private String focalLength;
         private String capturedAt;
-    }
-
-    @Data
-    @Builder
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class Comment {
-        private String authorName;
-        private String content;
-        private Instant createdAt;
     }
 }

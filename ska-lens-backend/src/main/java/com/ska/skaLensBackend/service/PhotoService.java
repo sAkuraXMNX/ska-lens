@@ -2,14 +2,20 @@ package com.ska.skaLensBackend.service;
 
 import com.ska.skaLensBackend.dto.BatchTagUpdateRequest;
 import com.ska.skaLensBackend.dto.CommentRequest;
+import com.ska.skaLensBackend.dto.LikeRequest;
 import com.ska.skaLensBackend.dto.PhotoUpdateRequest;
 import com.ska.skaLensBackend.model.Album;
+import com.ska.skaLensBackend.model.Comment;
 import com.ska.skaLensBackend.model.Photo;
 import com.ska.skaLensBackend.repository.AlbumRepository;
 import com.ska.skaLensBackend.repository.PhotoRepository;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -25,7 +31,6 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -35,18 +40,24 @@ public class PhotoService {
 
     private final PhotoRepository photoRepository;
     private final AlbumRepository albumRepository;
+    private final CommentService commentService;
     private final ExifExtractorService exifExtractorService;
+    private final MongoTemplate mongoTemplate;
     private final Path uploadDir;
 
     public PhotoService(
             PhotoRepository photoRepository,
             AlbumRepository albumRepository,
+            CommentService commentService,
             ExifExtractorService exifExtractorService,
+            MongoTemplate mongoTemplate,
             @Value("${app.upload-dir:uploads}") String uploadDir
     ) {
         this.photoRepository = photoRepository;
         this.albumRepository = albumRepository;
+        this.commentService = commentService;
         this.exifExtractorService = exifExtractorService;
+        this.mongoTemplate = mongoTemplate;
         this.uploadDir = Path.of(uploadDir).toAbsolutePath().normalize();
     }
 
@@ -186,19 +197,52 @@ public class PhotoService {
     }
 
     public Photo addComment(String id, @Valid CommentRequest request) {
-        Photo photo = photoRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Photo not found"));
+        ensurePhotoExists(id);
+        commentService.create(id, request);
+        mongoTemplate.updateFirst(
+                Query.query(Criteria.where("_id").is(id)),
+                new Update().inc("commentCount", 1).set("updatedAt", Instant.now()),
+                Photo.class
+        );
+        return getById(id, true);
+    }
 
-        List<Photo.Comment> comments = new ArrayList<>(Optional.ofNullable(photo.getComments()).orElse(List.of()));
-        comments.add(Photo.Comment.builder()
-                .authorName(request.getAuthorName())
-                .content(request.getContent())
-                .createdAt(Instant.now())
-                .build());
+    public List<Comment> listComments(String id) {
+        ensurePhotoExists(id);
+        return commentService.listByPhotoId(id);
+    }
 
-        photo.setComments(comments);
-        photo.setUpdatedAt(Instant.now());
-        return photoRepository.save(photo);
+    public Photo like(String id, @Valid LikeRequest request) {
+        ensurePhotoExists(id);
+        Query query = Query.query(
+                Criteria.where("_id").is(id)
+                        .and("likedBy").ne(request.getUserId())
+        );
+        Update update = new Update()
+                .addToSet("likedBy", request.getUserId())
+                .inc("likeCount", 1)
+                .set("updatedAt", Instant.now());
+        mongoTemplate.updateFirst(query, update, Photo.class);
+        return getById(id, true);
+    }
+
+    public Photo unlike(String id, @Valid LikeRequest request) {
+        ensurePhotoExists(id);
+        Query query = Query.query(
+                Criteria.where("_id").is(id)
+                        .and("likedBy").is(request.getUserId())
+        );
+        Update update = new Update()
+                .pull("likedBy", request.getUserId())
+                .inc("likeCount", -1)
+                .set("updatedAt", Instant.now());
+        mongoTemplate.updateFirst(query, update, Photo.class);
+        return getById(id, true);
+    }
+
+    public List<Comment> listTopComments(String id) {
+        ensurePhotoExists(id);
+        return commentService.listTop2ByPhotoId(id);
     }
 
     private boolean isPublicPhoto(Photo photo) {
@@ -244,5 +288,11 @@ public class PhotoService {
                 .filter(v -> !v.isBlank())
                 .distinct()
                 .toList();
+    }
+
+    private void ensurePhotoExists(String id) {
+        if (!photoRepository.existsById(id)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Photo not found");
+        }
     }
 }

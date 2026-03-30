@@ -5,7 +5,11 @@ import lombok.Data;
 
 @Data
 public class CommentRequest {
-    @NotBlank
+    private String userId;
+
+    /**
+     * Compatibility fallback for old clients.
+     */
     private String authorName;
 
     @NotBlank

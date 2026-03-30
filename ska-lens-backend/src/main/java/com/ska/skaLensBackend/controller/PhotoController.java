@@ -3,7 +3,9 @@ package com.ska.skaLensBackend.controller;
 import com.ska.skaLensBackend.dto.BatchDeleteRequest;
 import com.ska.skaLensBackend.dto.BatchTagUpdateRequest;
 import com.ska.skaLensBackend.dto.CommentRequest;
+import com.ska.skaLensBackend.dto.LikeRequest;
 import com.ska.skaLensBackend.dto.PhotoUpdateRequest;
+import com.ska.skaLensBackend.model.Comment;
 import com.ska.skaLensBackend.model.Photo;
 import com.ska.skaLensBackend.service.PhotoService;
 import jakarta.validation.Valid;
@@ -78,6 +80,26 @@ public class PhotoController {
     @PostMapping("/{id}/comments")
     public Photo addComment(@PathVariable String id, @Valid @RequestBody CommentRequest request) {
         return photoService.addComment(id, request);
+    }
+
+    @GetMapping("/{id}/comments")
+    public List<Comment> listComments(@PathVariable String id) {
+        return photoService.listComments(id);
+    }
+
+    @PostMapping("/{id}/likes")
+    public Photo like(@PathVariable String id, @Valid @RequestBody LikeRequest request) {
+        return photoService.like(id, request);
+    }
+
+    @DeleteMapping("/{id}/likes")
+    public Photo unlike(@PathVariable String id, @Valid @RequestBody LikeRequest request) {
+        return photoService.unlike(id, request);
+    }
+
+    @GetMapping("/{id}/comments/highlight")
+    public List<Comment> listTopComments(@PathVariable String id) {
+        return photoService.listTopComments(id);
     }
 
     private boolean isAdmin(Authentication authentication) {
